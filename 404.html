@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Página no encontrada - MedRecord Pro</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      body { 
+        background: linear-gradient(135deg, #F8FAFC 0%, #E2E8F0 100%);
+        color: #1E293B;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+      .container {
+        background: white;
+        max-width: 480px;
+        width: 100%;
+        padding: 48px 40px;
+        border-radius: 24px;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.1);
+        text-align: center;
+      }
+      .logo-container {
+        margin-bottom: 32px;
+      }
+      .logo-container svg {
+        width: 80px;
+        height: 80px;
+      }
+      .error-code {
+        font-size: 80px;
+        font-weight: 700;
+        color: #1e3a5f;
+        line-height: 1;
+        margin-bottom: 8px;
+      }
+      h1 {
+        font-size: 24px;
+        font-weight: 600;
+        color: #1E293B;
+        margin-bottom: 16px;
+      }
+      p {
+        font-size: 15px;
+        color: #64748B;
+        line-height: 1.6;
+        margin-bottom: 32px;
+      }
+      .btn-home {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        background: linear-gradient(135deg, #1e3a5f 0%, #2A4265 100%);
+        color: white;
+        text-decoration: none;
+        padding: 14px 32px;
+        border-radius: 12px;
+        font-size: 15px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+        box-shadow: 0 4px 14px rgba(30, 58, 95, 0.3);
+      }
+      .btn-home:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(30, 58, 95, 0.4);
+      }
+      .btn-home svg {
+        width: 18px;
+        height: 18px;
+      }
+      .footer-text {
+        margin-top: 32px;
+        font-size: 13px;
+        color: #94A3B8;
+      }
+      @media (max-width: 480px) {
+        .container { padding: 32px 24px; }
+        .error-code { font-size: 64px; }
+        h1 { font-size: 20px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="logo-container">
+        <svg viewBox="0 -10 100 95" xmlns="http://www.w3.org/2000/svg">
+          <g fill="none" stroke="#1e3a5f" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M50,80 C15,52 2,30 2,16 C2,4 12,-4 26,-4 C38,-4 47,5 50,14 C53,5 62,-4 74,-4 C88,-4 98,4 98,16 C98,30 85,52 50,80 Z"/>
+          </g>
+          <path d="M-4,42 L10,42 C14,42 16,40 18,36 L24,22 C26,18 28,18 30,22 L38,44 C40,50 42,50 44,44 L50,18 C52,12 54,12 56,18 L62,44 C64,50 66,50 68,44 L74,30 C76,26 78,26 80,30 L84,42 C86,44 90,44 96,42 L104,42" stroke="#9ACD32" fill="none" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="error-code">404</div>
+      <h1>Página no encontrada</h1>
+      <p>Lo sentimos, la página que estás buscando no existe o ha sido movida. Verifica la URL o regresa al inicio.</p>
+      <a href="/" class="btn-home">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/>
+        </svg>
+        Volver al inicio
+      </a>
+      <p class="footer-text">MedRecord Pro - Sistema de gestión médica</p>
+    </div>
+  </body>
+</html>
