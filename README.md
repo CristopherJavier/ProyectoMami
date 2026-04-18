@@ -1,0 +1,60 @@
+# ProyectoMami
+
+Este repositorio contiene actualmente archivos snapshot/exportados y recursos estáticos.
+
+Se agregó una base de **automatización no destructiva** para evaluar eficiencia, detectar riesgos y guiar mejoras.
+
+## Requisitos
+
+- Python 3.10+ (recomendado 3.11)
+
+## Auditoría automática (score 1-10)
+
+Ejecuta:
+
+```bash
+python scripts/audit_project.py --path . --json-output audit-report.json
+```
+
+Qué entrega:
+
+- Score global 1-10 y desglose por estructura, automatización, calidad y seguridad.
+- Hallazgos principales con recomendaciones accionables.
+- Reporte JSON para historial y CI.
+
+Para usar un umbral mínimo:
+
+```bash
+python scripts/audit_project.py --path . --json-output audit-report.json --min-score 6.5
+```
+
+## Limpieza segura (dry-run por defecto)
+
+Primero simula:
+
+```bash
+python scripts/cleanup_project.py --path . --json-output cleanup-report.json
+```
+
+Luego aplica movimientos (si estás de acuerdo):
+
+```bash
+python scripts/cleanup_project.py --path . --apply --json-output cleanup-report.json
+```
+
+La limpieza mueve archivos snapshot a `archive/raw_snapshot` para dejar la raíz más mantenible.
+
+## CI con GitHub Actions
+
+Se agregó:
+
+- `.github/workflows/project-audit.yml`
+
+Este workflow corre la auditoría en push/PR y publica `audit-report.json` como artifact.
+
+## Siguientes pasos recomendados
+
+1. Definir stack base (por ejemplo Vite + TypeScript o Python backend + frontend).
+2. Crear estructura `src/`, `tests/`, `scripts/`.
+3. Migrar lógica útil desde snapshots a código fuente mantenible.
+4. Agregar pruebas smoke para evitar regresiones.
