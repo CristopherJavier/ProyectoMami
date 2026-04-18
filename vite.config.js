@@ -1,0 +1,18 @@
+import { defineConfig } from 'vite';
+import { fileURLToPath, URL } from 'node:url';
+
+export default defineConfig({
+  root: 'ProyectoMami',
+  build: {
+    outDir: '../dist',
+    emptyOutDir: true,
+  },
+  server: {
+    port: 3000,
+  },
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./ProyectoMami/src', import.meta.url))
+    }
+  }
+});

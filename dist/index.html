@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedRecord Pro</title>
+    <meta name="description"
+        content="Dashboard médico profesional para gestión de pacientes, citas y expedientes clínicos">
+    <meta name="theme-color" content="#1e3a5f">
+
+    <!-- PWA -->
+    <link rel="manifest" href="/assets/manifest-CAO-tCjN.json">
+    <link rel="apple-touch-icon" href="/assets/logo-sOQ2X6vO.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
+    <!-- Google Fonts - DM Sans -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    <!-- Cropper.js CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css" />
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <script type="module" crossorigin src="/assets/index-Bxc6Dm_R.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-CpYFoJlg.css">
+</head>
+
+<body>
+
+    <!-- Pantalla de Carga (Splash Screen) -->
+    <div id="splash-screen">
+        <div class="splash-content">
+            <div class="logo-container">
+                <!-- Logo animado del splash (Simplificado) -->
+                <div class="splash-logo-wrapper">
+                    <svg viewBox="0 -10 100 95" class="splash-heart-svg" style="width: 140px; height: auto;">
+                        <g class="heart-group" fill="none" stroke="#1e3a5f" stroke-width="4" stroke-linecap="round"
+                            stroke-linejoin="round">
+                            <path class="heart-path"
+                                d="M50,80 C15,52 2,30 2,16 C2,4 12,-4 26,-4 C38,-4 47,5 50,14 C53,5 62,-4 74,-4 C88,-4 98,4 98,16 C98,30 85,52 50,80 Z" />
+                        </g>
+                        <path class="pulse-line"
+                            d="M-4,42 L10,42 C14,42 16,40 18,36 L24,22 C26,18 28,18 30,22 L38,44 C40,50 42,50 44,44 L50,18 C52,12 54,12 56,18 L62,44 C64,50 66,50 68,44 L74,30 C76,26 78,26 80,30 L84,42 C86,44 90,44 96,42 L104,42"
+                            stroke="#9ACD32" fill="none" stroke-width="5" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                    <span class="splash-text">MedRecord</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Login injected by src/main.js -->
+    
+    <!-- Sidebar injected by src/main.js -->
+
+    <!-- Modals injected by src/main.js -->
+
+    <!-- GSAP Animations -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+    <!-- Chart.js for Dashboard -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Main App Script -->
+
+    <!-- Service Worker -->
+    <script>
+        // Register Service Worker for PWA
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js')
+                    .then(reg => console.log('SW registrado'))
+                    .catch(err => console.log('SW error:', err));
+            });
+        }
+    </script>
+
+</body>
+
+</html>

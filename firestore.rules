@@ -1,0 +1,85 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(data) {
+      return isSignedIn() && data.userId == request.auth.uid;
+    }
+
+    function ownerUnchanged() {
+      return request.resource.data.userId == resource.data.userId;
+    }
+
+    function isDoctorProfileOwner(doctorId) {
+      return isSignedIn() && request.auth.uid == doctorId;
+    }
+
+    // Pacientes
+    match /patients/{patientId} {
+      allow read, delete: if isOwner(resource.data);
+      allow create: if isOwner(request.resource.data);
+      allow update: if isOwner(resource.data) &&
+                    isOwner(request.resource.data) &&
+                    ownerUnchanged();
+    }
+
+    // Citas
+    match /appointments/{appointmentId} {
+      allow read, delete: if isOwner(resource.data);
+      allow create: if isOwner(request.resource.data);
+      allow update: if isOwner(resource.data) &&
+                    isOwner(request.resource.data) &&
+                    ownerUnchanged();
+    }
+
+    // Notas clínicas
+    match /clinicalNotes/{noteId} {
+      allow read, delete: if isOwner(resource.data);
+      allow create: if isOwner(request.resource.data);
+      allow update: if isOwner(resource.data) &&
+                    isOwner(request.resource.data) &&
+                    ownerUnchanged();
+    }
+
+    // Signos vitales
+    match /vitalSigns/{vitalId} {
+      allow read, delete: if isOwner(resource.data);
+      allow create: if isOwner(request.resource.data);
+      allow update: if isOwner(resource.data) &&
+                    isOwner(request.resource.data) &&
+                    ownerUnchanged();
+    }
+
+    // Recetas médicas
+    match /prescriptions/{prescriptionId} {
+      allow read, delete: if isOwner(resource.data);
+      allow create: if isOwner(request.resource.data);
+      allow update: if isOwner(resource.data) &&
+                    isOwner(request.resource.data) &&
+                    ownerUnchanged();
+    }
+
+    // Consultas
+    match /consultations/{consultationId} {
+      allow read, delete: if isOwner(resource.data);
+      allow create: if isOwner(request.resource.data);
+      allow update: if isOwner(resource.data) &&
+                    isOwner(request.resource.data) &&
+                    ownerUnchanged();
+    }
+
+    // Contadores de pacientes - ID debe terminar en el userId
+    match /counters/{counterId} {
+      allow read, create, update, delete: if isSignedIn() &&
+        counterId == 'patients_' + request.auth.uid;
+    }
+
+    // Perfil de doctor - solo el dueño del documento
+    match /doctores/{doctorId} {
+      allow read, create, update, delete: if isDoctorProfileOwner(doctorId);
+    }
+  }
+}
