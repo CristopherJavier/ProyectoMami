@@ -2501,9 +2501,11 @@ function renderSettings() {
                 data: {
                     patients: patientsCache,
                     appointments: appointmentsCache,
+                    notes: notesCache,
                     clinicalNotes: notesCache,
                     vitalSigns: vitalSignsCache,
-                    prescriptions: prescriptionsCache
+                    prescriptions: prescriptionsCache,
+                    consultations: consultationsCache
                 }
             };
 
@@ -2541,35 +2543,22 @@ function renderSettings() {
                     const batch = writeBatch(db);
                     let count = 0;
                     
-                    // Import patients
-                    if (data.data?.patients) {
-                        data.data.patients.forEach(item => {
-                            const ref = doc(db, 'patients', item.id);
-                            delete item.id;
-                            batch.set(ref, item);
+                    const importCollection = (collectionName, items = []) => {
+                        items.forEach(item => {
+                            if (!item?.id) return;
+                            const { id, ...payload } = item;
+                            const ref = doc(db, collectionName, id);
+                            batch.set(ref, { ...payload, userId: currentUser.uid });
                             count++;
                         });
-                    }
-                    
-                    // Import appointments
-                    if (data.data?.appointments) {
-                        data.data.appointments.forEach(item => {
-                            const ref = doc(db, 'appointments', item.id);
-                            delete item.id;
-                            batch.set(ref, item);
-                            count++;
-                        });
-                    }
+                    };
 
-                    // Import clinical notes
-                    if (data.data?.notes) {
-                        data.data.notes.forEach(item => {
-                            const ref = doc(db, 'clinicalNotes', item.id);
-                            delete item.id;
-                            batch.set(ref, item);
-                            count++;
-                        });
-                    }
+                    importCollection('patients', data.data?.patients || []);
+                    importCollection('appointments', data.data?.appointments || []);
+                    importCollection('clinicalNotes', data.data?.notes || data.data?.clinicalNotes || []);
+                    importCollection('vitalSigns', data.data?.vitalSigns || []);
+                    importCollection('prescriptions', data.data?.prescriptions || []);
+                    importCollection('consultations', data.data?.consultations || []);
 
                     if (count > 0) {
                         await batch.commit();
@@ -2978,12 +2967,25 @@ saveAppointmentBtn?.addEventListener('click', async () => {
             updatedAt: serverTimestamp()
         };
 
+        let savedAppointmentId = editingAppointmentId;
         if (editingAppointmentId) {
+            NotificationManager.removeAppointmentReminders?.(editingAppointmentId);
             await updateDoc(doc(db, "appointments", editingAppointmentId), appointmentData);
         } else {
             appointmentData.createdAt = serverTimestamp();
-            await addDoc(collection(db, "appointments"), appointmentData);
+            const docRef = await addDoc(collection(db, "appointments"), appointmentData);
+            savedAppointmentId = docRef.id;
         }
+
+        const patient = patientsCache.find(p => p.id === patientId);
+        NotificationManager.scheduleAppointmentReminder?.({
+            id: savedAppointmentId,
+            patientId,
+            patientName: patient?.name || 'Paciente',
+            type,
+            date,
+            time
+        });
 
         await loadAppointments();
         closeModal(appointmentModal);
@@ -3859,9 +3861,9 @@ function exportPatientPDF(patientId) {
                                 <tr>
                                     <td>${formatDate(v.recordedAt)}</td>
                                     <td>${v.systolic || '--'}/${v.diastolic || '--'}</td>
-                                    <td>${v.heartRate || '--'}</td>
+                                    <td>${v.pulse ?? v.heartRate ?? '--'}</td>
                                     <td>${v.temperature || '--'}°C</td>
-                                    <td>${v.oxygenSat || '--'}%</td>
+                                    <td>${v.oxygen ?? v.oxygenSat ?? v.oxygenSaturation ?? '--'}%</td>
                                     <td>${v.weight || '--'} kg</td>
                                 </tr>
                             `).join('')}

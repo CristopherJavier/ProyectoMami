@@ -14,14 +14,14 @@ export const BackupManager = {
                 data: {
                     patients: [],
                     appointments: [],
+                    notes: [],
                     clinicalNotes: [],
                     vitalSigns: [],
-                    prescriptions: []
+                    prescriptions: [],
+                    consultations: []
                 }
             };
-            
-            // This would be called with actual Firebase data
-            // For now, return the structure
+
             return exportData;
         } catch (error) {
             console.error('Error exporting data:', error);
@@ -72,22 +72,33 @@ export const BackupManager = {
     
     // Validate imported data
     validateImportData(data) {
-        const requiredCollections = ['patients', 'appointments', 'clinicalNotes', 'vitalSigns', 'prescriptions'];
+        if (!data || typeof data !== 'object' || !data.data || typeof data.data !== 'object') {
+            return { valid: false, errors: ['Estructura de respaldo invalida'] };
+        }
+
+        const requiredCollections = ['patients', 'appointments', 'vitalSigns', 'prescriptions'];
         const errors = [];
-        
+
         requiredCollections.forEach(collection => {
             if (!Array.isArray(data.data[collection])) {
-                errors.push(`Colección '${collection}' no encontrada o inválida`);
+                errors.push(`Coleccion '${collection}' no encontrada o invalida`);
             }
         });
-        
+
+        const notes = data.data.notes ?? data.data.clinicalNotes;
+        if (!Array.isArray(notes)) {
+            errors.push("Coleccion 'notes/clinicalNotes' no encontrada o invalida");
+        }
+
+        if (data.data.consultations !== undefined && !Array.isArray(data.data.consultations)) {
+            errors.push("Coleccion 'consultations' invalida");
+        }
+
         return {
             valid: errors.length === 0,
             errors
         };
-    },
-    
-    // Render backup section HTML
+    },    // Render backup section HTML
     renderBackupSection() {
         return `
             <div class="backup-section">
