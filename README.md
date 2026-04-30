@@ -1,60 +1,60 @@
-# ProyectoMami
+# ProyectoMami / MedRecord Pro
 
-Este repositorio contiene actualmente archivos snapshot/exportados y recursos estáticos.
-
-Se agregó una base de **automatización no destructiva** para evaluar eficiencia, detectar riesgos y guiar mejoras.
+Dashboard medico para gestion de pacientes, citas, consultas, signos vitales, recetas, reportes y respaldos con Firebase.
 
 ## Requisitos
 
-- Python 3.10+ (recomendado 3.11)
+- Node.js 20+
+- npm
+- Python 3.10+ solo para `scripts/audit_project.py`
 
-## Auditoría automática (score 1-10)
+## Desarrollo
 
-Ejecuta:
+```bash
+npm ci
+npm run dev
+```
+
+La app queda disponible en `http://localhost:3000`.
+
+## Verificacion
+
+```bash
+npm test
+npm run build
+npm audit --omit=dev
+```
+
+`npm test` ejecuta pruebas basicas de calculadoras y pruebas de humo para validar estructura, build, backup/import, PWA y campos clinicos criticos.
+
+## Build y deploy
+
+```bash
+npm run build
+firebase deploy
+```
+
+Firebase Hosting sirve la carpeta `dist/`, generada por Vite. No edites `dist/` como fuente principal; los cambios deben entrar por `index.html`, `src/`, `app.js`, `js/modules/`, `sw.js` o assets publicos.
+
+## Auditoria automatica
+
+Si Python esta instalado:
 
 ```bash
 python scripts/audit_project.py --path . --json-output audit-report.json
 ```
 
-Qué entrega:
-
-- Score global 1-10 y desglose por estructura, automatización, calidad y seguridad.
-- Hallazgos principales con recomendaciones accionables.
-- Reporte JSON para historial y CI.
-
-Para usar un umbral mínimo:
+Con umbral minimo:
 
 ```bash
-python scripts/audit_project.py --path . --json-output audit-report.json --min-score 6.5
+python scripts/audit_project.py --path . --json-output audit-report.json --min-score 7
 ```
 
-## Limpieza segura (dry-run por defecto)
+## Estructura relevante
 
-Primero simula:
-
-```bash
-python scripts/cleanup_project.py --path . --json-output cleanup-report.json
-```
-
-Luego aplica movimientos (si estás de acuerdo):
-
-```bash
-python scripts/cleanup_project.py --path . --apply --json-output cleanup-report.json
-```
-
-La limpieza mueve archivos snapshot a `archive/raw_snapshot` para dejar la raíz más mantenible.
-
-## CI con GitHub Actions
-
-Se agregó:
-
-- `.github/workflows/project-audit.yml`
-
-Este workflow corre la auditoría en push/PR y publica `audit-report.json` como artifact.
-
-## Siguientes pasos recomendados
-
-1. Definir stack base (por ejemplo Vite + TypeScript o Python backend + frontend).
-2. Crear estructura `src/`, `tests/`, `scripts/`.
-3. Migrar lógica útil desde snapshots a código fuente mantenible.
-4. Agregar pruebas smoke para evitar regresiones.
+- `index.html`: entrada real de Vite.
+- `src/main.js`: inyecta la estructura de UI y carga la logica de la app.
+- `src/app-compiled.js`: logica principal migrada desde el snapshot compilado anterior.
+- `app.js` y `js/modules/`: fuente legible para mantenimiento gradual de funcionalidades.
+- `public/`: archivos estaticos copiados al build.
+- `dist/`: salida generada por `npm run build`.
