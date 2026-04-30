@@ -120,10 +120,10 @@ export const CompletePDFExport = {
                 const date = vital.date ? new Date(vital.date).toLocaleDateString('es-ES') : '-';
                 doc.text(date, margin, yPos);
                 doc.text(`${vital.systolic || '-'}/${vital.diastolic || '-'}`, margin + 35, yPos);
-                doc.text(`${vital.heartRate || '-'}`, margin + 60, yPos);
+                doc.text(`${vital.pulse ?? vital.heartRate ?? '-'}`, margin + 60, yPos);
                 doc.text(`${vital.temperature || '-'}°C`, margin + 80, yPos);
                 doc.text(`${vital.respiratoryRate || '-'}`, margin + 100, yPos);
-                doc.text(`${vital.oxygenSaturation || '-'}%`, margin + 120, yPos);
+                doc.text(`${vital.oxygen ?? vital.oxygenSat ?? vital.oxygenSaturation ?? '-'}%`, margin + 120, yPos);
                 doc.text(`${vital.weight || '-'} kg`, margin + 145, yPos);
                 yPos += lineHeight;
             });
