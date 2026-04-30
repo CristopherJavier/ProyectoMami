@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node ProyectoMami/js/tests/basic-tests.js",
+    "test": "node js/tests/basic-tests.js && node js/tests/smoke-tests.js",
+    "test:smoke": "node js/tests/smoke-tests.js",
     "deploy": "firebase deploy"
   },
   "keywords": [
