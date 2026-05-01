@@ -18,7 +18,8 @@ import {
     orderBy,
     serverTimestamp,
     onSnapshot,
-    writeBatch
+    writeBatch,
+    enableIndexedDbPersistence
 } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js";
 import {
     getAuth,
@@ -27,12 +28,18 @@ import {
     onAuthStateChanged,
     signOut,
     updateProfile,
-    sendPasswordResetEmail
+    sendPasswordResetEmail,
+    sendEmailVerification
 } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
 // Import active modules only
 import { NotificationManager } from './js/modules/notifications.js';
 import { BackupManager } from './js/modules/backup.js';
 import { AccessLogs } from './js/modules/access-logs.js';
+import { AdvancedSearch } from './js/modules/advanced-search.js';
+import { ClinicalTemplates } from './js/modules/templates.js';
+import { AllergyAlerts } from './js/modules/allergies.js';
+import { DashboardCharts } from './js/modules/dashboard-charts.js';
+import { MedicationTracker } from './js/modules/medications.js';
 
 // Firebase Configuration
 const firebaseConfig = {
@@ -49,6 +56,18 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+
+enableIndexedDbPersistence(db).catch((error) => {
+    if (error.code === 'failed-precondition') {
+        console.warn('Persistencia offline deshabilitada: múltiples pestañas abiertas.');
+        return;
+    }
+    if (error.code === 'unimplemented') {
+        console.warn('Persistencia offline no soportada por el navegador.');
+        return;
+    }
+    console.warn('No se pudo activar persistencia offline:', error);
+});
 
 // Initialize Notification Manager
 NotificationManager.init();
@@ -69,6 +88,14 @@ let prescriptionsCache = [];
 let consultationsCache = [];
 let currentRoute = 'dashboard';
 let activityChart = null;
+let globalSearchInitialized = false;
+let sessionTimeoutHandle = null;
+
+const SECURITY_CONFIG = {
+    maxLoginAttempts: 5,
+    lockoutMinutes: 15,
+    sessionTimeoutMinutes: 30
+};
 
 // ============================================================
 // DOM ELEMENTS
@@ -345,6 +372,80 @@ function closeModal(modal, callback) {
     });
 }
 
+function logAction(action, details = {}) {
+    try {
+        AccessLogs.log(action, details);
+    } catch (error) {
+        console.warn('No se pudo registrar en auditoría:', action, error);
+    }
+}
+
+function getLoginSecurityState() {
+    const raw = localStorage.getItem('medrecord-login-security');
+    if (!raw) {
+        return { attempts: 0, lockedUntil: null };
+    }
+    try {
+        const parsed = JSON.parse(raw);
+        return {
+            attempts: Number(parsed.attempts || 0),
+            lockedUntil: parsed.lockedUntil || null
+        };
+    } catch {
+        return { attempts: 0, lockedUntil: null };
+    }
+}
+
+function saveLoginSecurityState(state) {
+    localStorage.setItem('medrecord-login-security', JSON.stringify(state));
+}
+
+function clearLoginSecurityState() {
+    localStorage.removeItem('medrecord-login-security');
+}
+
+function getLoginLockoutRemainingMinutes() {
+    const state = getLoginSecurityState();
+    if (!state.lockedUntil) return 0;
+    const lockedUntilDate = new Date(state.lockedUntil);
+    const diffMs = lockedUntilDate.getTime() - Date.now();
+    if (diffMs <= 0) {
+        clearLoginSecurityState();
+        return 0;
+    }
+    return Math.ceil(diffMs / 60000);
+}
+
+function registerFailedLoginAttempt() {
+    const state = getLoginSecurityState();
+    const attempts = state.attempts + 1;
+    if (attempts >= SECURITY_CONFIG.maxLoginAttempts) {
+        const lockedUntil = new Date(Date.now() + SECURITY_CONFIG.lockoutMinutes * 60000).toISOString();
+        saveLoginSecurityState({ attempts, lockedUntil });
+        return;
+    }
+    saveLoginSecurityState({ attempts, lockedUntil: null });
+}
+
+function resetSessionTimeout() {
+    if (!currentUser) return;
+    if (sessionTimeoutHandle) {
+        clearTimeout(sessionTimeoutHandle);
+    }
+    sessionTimeoutHandle = setTimeout(async () => {
+        showToast('Sesión cerrada por inactividad', 'info');
+        logAction('session_timeout', { userId: currentUser?.uid || '' });
+        await signOut(auth);
+    }, SECURITY_CONFIG.sessionTimeoutMinutes * 60000);
+}
+
+function initSessionTimeoutMonitoring() {
+    const events = ['mousemove', 'keydown', 'click', 'touchstart'];
+    events.forEach((eventName) => {
+        document.addEventListener(eventName, resetSessionTimeout, { passive: true });
+    });
+}
+
 // ============================================================
 // AUTHENTICATION
 // ============================================================
@@ -410,6 +511,7 @@ function showAppUI() {
     if (!splashComplete) return;
     loginScreen.style.display = 'none';
     mainApp.style.display = 'grid';
+    initGlobalSearchPalette();
     gsap.fromTo(mainApp, { opacity: 0 }, { opacity: 1, duration: 0.5 });
 }
 
@@ -420,13 +522,148 @@ function showLoginUI() {
     gsap.fromTo(loginScreen, { opacity: 0 }, { opacity: 1, duration: 0.5 });
 }
 
+function getGlobalSearchResults(queryText) {
+    const query = queryText.trim().toLowerCase();
+    if (query.length < 2) return [];
+
+    const results = [];
+    const activePatients = patientsCache.filter((patient) =>
+        (patient.status === 'active' || !patient.status) &&
+        ((patient.name || '').toLowerCase().includes(query) || (patient.readableId || '').toLowerCase().includes(query))
+    ).slice(0, 5);
+
+    activePatients.forEach((patient) => {
+        results.push({
+            type: 'patient',
+            id: patient.id,
+            title: patient.name,
+            subtitle: `Paciente • ${patient.readableId || patient.id.substring(0, 8).toUpperCase()}`
+        });
+    });
+
+    appointmentsCache.filter((appointment) => {
+        const patient = patientsCache.find((item) => item.id === appointment.patientId);
+        return (patient?.name || '').toLowerCase().includes(query) ||
+            (appointment.type || '').toLowerCase().includes(query) ||
+            (appointment.notes || '').toLowerCase().includes(query);
+    }).slice(0, 5).forEach((appointment) => {
+        const patient = patientsCache.find((item) => item.id === appointment.patientId);
+        results.push({
+            type: 'appointment',
+            id: appointment.id,
+            title: `${patient?.name || 'Paciente'} • ${appointment.type || 'Cita'}`,
+            subtitle: `Cita • ${formatDate(appointment.date, 'datetime')}`
+        });
+    });
+
+    notesCache.filter((note) => {
+        const patient = patientsCache.find((item) => item.id === note.patientId);
+        return (patient?.name || '').toLowerCase().includes(query) ||
+            (note.type || '').toLowerCase().includes(query) ||
+            (note.content || '').toLowerCase().includes(query);
+    }).slice(0, 5).forEach((note) => {
+        const patient = patientsCache.find((item) => item.id === note.patientId);
+        results.push({
+            type: 'note',
+            id: note.id,
+            patientId: note.patientId,
+            title: `${patient?.name || 'Paciente'} • ${note.type || 'Nota'}`,
+            subtitle: `Nota • ${(note.content || '').substring(0, 80)}`
+        });
+    });
+
+    return results.slice(0, 12);
+}
+
+function initGlobalSearchPalette() {
+    if (globalSearchInitialized) return;
+    globalSearchInitialized = true;
+
+    const palette = document.createElement('div');
+    palette.id = 'global-search-palette';
+    palette.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;z-index:20000;align-items:flex-start;justify-content:center;padding-top:12vh;';
+    palette.innerHTML = `
+        <div style="width:min(760px,92vw);background:#fff;border-radius:14px;box-shadow:0 24px 80px rgba(15,23,42,.25);overflow:hidden;">
+            <div style="padding:12px 14px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:10px;">
+                <i class="ph ph-magnifying-glass" style="font-size:20px;color:#64748b;"></i>
+                <input id="global-search-input" type="text" placeholder="Buscar pacientes, citas o notas..." style="flex:1;border:none;outline:none;font-size:15px;">
+                <span style="font-size:11px;color:#64748b;">ESC</span>
+            </div>
+            <div id="global-search-results" style="max-height:52vh;overflow:auto;padding:8px;"></div>
+        </div>
+    `;
+    document.body.appendChild(palette);
+
+    const input = document.getElementById('global-search-input');
+    const resultsContainer = document.getElementById('global-search-results');
+
+    const renderResults = (query) => {
+        const results = getGlobalSearchResults(query);
+        if (results.length === 0) {
+            resultsContainer.innerHTML = '<div style="padding:16px;color:#64748b;font-size:13px;">Sin resultados.</div>';
+            return;
+        }
+        resultsContainer.innerHTML = results.map((result) => `
+            <button class="global-search-item" data-type="${result.type}" data-id="${result.id}" data-patient-id="${result.patientId || ''}" style="width:100%;text-align:left;border:0;background:transparent;padding:10px 12px;border-radius:10px;cursor:pointer;">
+                <div style="font-weight:600;color:#0f172a;">${result.title}</div>
+                <div style="font-size:12px;color:#64748b;">${result.subtitle}</div>
+            </button>
+        `).join('');
+    };
+
+    const closePalette = () => {
+        palette.style.display = 'none';
+        input.value = '';
+    };
+
+    const openPalette = () => {
+        palette.style.display = 'flex';
+        renderResults('');
+        setTimeout(() => input.focus(), 0);
+    };
+
+    document.addEventListener('keydown', (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+            event.preventDefault();
+            openPalette();
+        } else if (event.key === 'Escape' && palette.style.display === 'flex') {
+            closePalette();
+        }
+    });
+
+    input.addEventListener('input', () => renderResults(input.value));
+    palette.addEventListener('click', (event) => {
+        if (event.target === palette) {
+            closePalette();
+            return;
+        }
+        const item = event.target.closest('.global-search-item');
+        if (!item) return;
+        const type = item.dataset.type;
+        if (type === 'patient') {
+            navigateTo(`paciente/${item.dataset.id}`);
+        } else if (type === 'appointment') {
+            navigateTo('citas');
+        } else if (type === 'note') {
+            navigateTo(`paciente/${item.dataset.patientId}`);
+        }
+        closePalette();
+    });
+}
+
 // Iniciar Splash
 initSplashScreen();
+initSessionTimeoutMonitoring();
 
 onAuthStateChanged(auth, async (user) => {
+    const previousUser = currentUser;
     currentUser = user; // Guardar estado globalmente
 
     if (user) {
+        if (!previousUser || previousUser.uid !== user.uid) {
+            logAction('login', { userId: user.uid, email: user.email || '' });
+        }
+        resetSessionTimeout();
         await loadDoctorProfile(user.uid);
         await loadAllData();
         window.location.hash = 'dashboard';
@@ -436,6 +673,10 @@ onAuthStateChanged(auth, async (user) => {
             showAppUI();
         }
     } else {
+        if (sessionTimeoutHandle) {
+            clearTimeout(sessionTimeoutHandle);
+            sessionTimeoutHandle = null;
+        }
         currentDoctorData = null;
         patientsCache = [];
         if (splashComplete) {
@@ -456,9 +697,15 @@ loginEmail?.addEventListener('keypress', (e) => {
 async function handleLogin() {
     const email = loginEmail.value.trim();
     const password = loginPassword.value;
+    const lockoutRemaining = getLoginLockoutRemainingMinutes();
 
     if (!email || !password) {
         showError(loginError, 'Por favor complete todos los campos.');
+        return;
+    }
+
+    if (lockoutRemaining > 0) {
+        showError(loginError, `Cuenta temporalmente bloqueada. Intenta de nuevo en ${lockoutRemaining} minuto(s).`);
         return;
     }
 
@@ -468,7 +715,10 @@ async function handleLogin() {
 
     try {
         await signInWithEmailAndPassword(auth, email, password);
+        clearLoginSecurityState();
     } catch (error) {
+        registerFailedLoginAttempt();
+        logAction('failed_login', { email });
         let message = 'Error al iniciar sesión.';
         if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password') {
             message = 'Correo o contraseña incorrectos.';
@@ -517,6 +767,7 @@ async function handleRegister() {
 
     try {
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        await sendEmailVerification(userCredential.user);
 
         // Create doctor profile
         await setDoc(doc(db, "doctores", userCredential.user.uid), {
@@ -535,6 +786,7 @@ async function handleRegister() {
         registerEmail.value = '';
         registerPassword.value = '';
         registerConfirm.value = '';
+        showToast('Cuenta creada. Revisa tu correo para verificar la cuenta.', 'success');
 
     } catch (error) {
         let message = 'Error al registrar la cuenta.';
@@ -674,7 +926,7 @@ logoutBtn?.addEventListener('click', (e) => {
 cancelLogoutBtn?.addEventListener('click', () => closeModal(logoutModal));
 
 confirmLogoutBtn?.addEventListener('click', async () => {
-    AccessLogs.log('logout', {});
+    logAction('logout', { userId: currentUser?.uid || '' });
     await signOut(auth);
     closeModal(logoutModal);
 });
@@ -835,6 +1087,7 @@ async function cleanupDeletedPatients() {
             if (deletedDate < thirtyDaysAgo) {
                 try {
                     await deleteDoc(doc(db, "patients", patient.id));
+                    logAction('delete_patient_auto', { patientId: patient.id });
                     console.log(`Paciente ${patient.name} eliminado automáticamente (más de 30 días)`);
                 } catch (error) {
                     console.error("Error al eliminar paciente automáticamente:", error);
@@ -936,6 +1189,8 @@ function renderDashboard() {
 
     // Solo contar pacientes activos
     const activePatients = patientsCache.filter(p => p.status === 'active' || !p.status);
+    const analyticsPatients = activePatients.map(patient => ({ ...patient, dob: patient.birthDate }));
+    const dashboardAnalytics = DashboardCharts.renderDashboard(analyticsPatients, appointmentsCache, notesCache);
 
     mainContent.innerHTML = `
         <div class="page-header">
@@ -1025,6 +1280,13 @@ function renderDashboard() {
                 `}
             </div>
         </div>
+
+        <section style="margin-top: 24px;">
+            <div class="chart-container">
+                <h3 style="margin-bottom: 16px;">Analítica Clínica Avanzada</h3>
+                ${dashboardAnalytics}
+            </div>
+        </section>
     `;
 
     // Render activity chart
@@ -1159,6 +1421,10 @@ function renderPatients(filter = 'active') {
             <i class="ph ph-magnifying-glass"></i>
             <input type="text" id="patient-search" placeholder="Buscar paciente por nombre...">
         </div>
+        <div class="advanced-search-wrapper" style="margin-top: 12px; margin-bottom: 12px;">
+            ${AdvancedSearch.renderSearchPanel()}
+            <p id="advanced-search-summary" style="margin-top: 8px; color: var(--text-secondary); font-size: 12px;"></p>
+        </div>
         
         ${displayPatients.length > 0 ? `
             <div class="patients-list" id="patients-list">
@@ -1198,6 +1464,42 @@ function renderPatients(filter = 'active') {
         if (listEl) {
             listEl.innerHTML = filtered.map(patient => renderPatientCard(patient, filter)).join('');
             attachPatientCardListeners(filter);
+        }
+    });
+
+    const applySearchBtn = document.getElementById('apply-search-btn');
+    const clearSearchBtn = document.getElementById('clear-search-btn');
+    const advancedSearchSummary = document.getElementById('advanced-search-summary');
+
+    const applyAdvancedSearch = () => {
+        const source = displayPatients.map((patient) => ({ ...patient, dob: patient.birthDate }));
+        const filters = AdvancedSearch.getFiltersFromForm();
+        const advancedFiltered = AdvancedSearch.searchPatients(source, filters);
+        const allowedIds = new Set(advancedFiltered.map((patient) => patient.id));
+        const filteredPatients = displayPatients.filter((patient) => allowedIds.has(patient.id));
+        const listEl = document.getElementById('patients-list');
+        if (listEl) {
+            listEl.innerHTML = filteredPatients.map((patient) => renderPatientCard(patient, filter)).join('');
+            attachPatientCardListeners(filter);
+        }
+        const activeFilters = AdvancedSearch.countActiveFilters();
+        if (advancedSearchSummary) {
+            advancedSearchSummary.textContent = activeFilters > 0
+                ? `Filtros activos: ${activeFilters} • Resultados: ${filteredPatients.length}`
+                : '';
+        }
+    };
+
+    applySearchBtn?.addEventListener('click', applyAdvancedSearch);
+    clearSearchBtn?.addEventListener('click', () => {
+        AdvancedSearch.clearFilters();
+        const listEl = document.getElementById('patients-list');
+        if (listEl) {
+            listEl.innerHTML = displayPatients.map((patient) => renderPatientCard(patient, filter)).join('');
+            attachPatientCardListeners(filter);
+        }
+        if (advancedSearchSummary) {
+            advancedSearchSummary.textContent = '';
         }
     });
 
@@ -1297,6 +1599,10 @@ async function changePatientStatus(patientId, newStatus) {
         const activeTab = document.querySelector('.patient-tab.active');
         const currentFilter = activeTab ? activeTab.dataset.filter : 'active';
         renderPatients(currentFilter);
+        logAction(newStatus === 'deleted' ? 'delete_patient' : 'edit_patient', {
+            patientId,
+            status: newStatus
+        });
 
         const messages = {
             'inactive': 'Paciente dado de baja',
@@ -1322,6 +1628,7 @@ async function deletePatientPermanently(patientId) {
         patientsCache = patientsCache.filter(p => p.id !== patientId);
 
         renderPatients('deleted');
+        logAction('delete_patient_permanent', { patientId });
         showToast('Paciente eliminado permanentemente', 'success');
     } catch (error) {
         console.error("Error deleting patient:", error);
@@ -1393,7 +1700,7 @@ function renderPatientDetail(patientId) {
     }
 
     // Log access to patient record
-    AccessLogs.log('view_patient', { patientId, patientName: patient.name });
+    logAction('view_patient', { patientId, patientName: patient.name });
 
     const age = calculateAge(patient.birthDate);
     const patientNotes = notesCache.filter(n => n.patientId === patientId);
@@ -1401,22 +1708,25 @@ function renderPatientDetail(patientId) {
     const patientPrescriptions = prescriptionsCache.filter(p => p.patientId === patientId);
     const allergies = patient.allergies ? patient.allergies.split(',').map(a => a.trim()).filter(a => a) : [];
     const conditions = patient.conditions ? patient.conditions.split(',').map(c => c.trim()).filter(c => c) : [];
+    const medicationSource = patientPrescriptions.flatMap((rx) => (rx.medications || []).map((med, index) => ({
+        id: `${rx.id}_${index}`,
+        medication: med.name || 'Medicamento',
+        dose: med.dosage || '',
+        frequency: med.frequency || 'once',
+        duration: med.duration || '7',
+        route: med.route || 'Vía oral',
+        date: rx.createdAt?.toDate
+            ? rx.createdAt.toDate().toISOString().split('T')[0]
+            : new Date().toISOString().split('T')[0],
+        patientId
+    })));
+    const trackedMedications = medicationSource.map((item) => MedicationTracker.prescriptionToMedication(item));
 
     // Check if patient has allergies for prominent alert
     const hasAllergies = allergies.length > 0;
 
     mainContent.innerHTML = `
-        ${hasAllergies ? `
-            <div class="allergy-alert">
-                <i class="ph ph-warning-circle"></i>
-                <div class="allergy-alert-content">
-                    <h4>⚠️ ALERGIAS CONOCIDAS</h4>
-                    <p>
-                        ${allergies.map(a => `<span class="allergy-tag">${a}</span>`).join(' ')}
-                    </p>
-                </div>
-            </div>
-        ` : ''}
+        ${AllergyAlerts.renderAllergyAlert(patient)}
         
         <header class="patient-header">
             <div class="patient-profile">
@@ -1427,11 +1737,7 @@ function renderPatientDetail(patientId) {
                     <div class="patient-name-row">
                         <h1>${patient.name}</h1>
                         <span class="patient-id">ID: ${patient.readableId || patient.id.substring(0, 8).toUpperCase()}</span>
-                        ${hasAllergies ? `<span class="allergy-indicator" style="display: inline-flex; align-items: center; gap: 4px; 
-                                 background: var(--bg-red-light); color: var(--color-red);
-                                 padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 600; margin-left: 8px;">
-                            <i class="ph ph-warning"></i> ${allergies.length} Alergia${allergies.length > 1 ? 's' : ''}
-                        </span>` : ''}
+                        ${AllergyAlerts.renderAllergyIndicator(patient)}
                     </div>
                     <div class="patient-meta">
                         <span><i class="ph ph-calendar-blank"></i> ${age} años • ${patient.sex}</span>
@@ -1469,38 +1775,11 @@ function renderPatientDetail(patientId) {
         </div>
 
         <!-- Active Medications Section -->
-        ${patientPrescriptions.length > 0 ? `
+        ${trackedMedications.length > 0 ? `
             <section class="medications-section" style="margin-bottom: 24px;">
                 <div class="chart-container">
                     <h3 style="margin-bottom: 16px;"><i class="ph ph-pill"></i> Medicamentos Activos</h3>
-                    <div id="medications-list">
-                        ${patientPrescriptions.slice(0, 5).map(rx => {
-            const startDate = rx.date ? new Date(rx.date) : new Date();
-            const durationDays = parseInt(rx.duration) || 7;
-            const today = new Date();
-            const daysPassed = Math.floor((today - startDate) / (1000 * 60 * 60 * 24));
-            const daysRemaining = Math.max(0, durationDays - daysPassed);
-            const isActive = daysRemaining > 0;
-
-            return `
-                                <div class="medication-card" style="opacity: ${isActive ? 1 : 0.6};">
-                                    <div class="medication-icon">
-                                        <i class="ph ph-pill"></i>
-                                    </div>
-                                    <div class="medication-info">
-                                        <h4>${rx.medication}</h4>
-                                        <p>${rx.dose} - ${rx.frequency}</p>
-                                    </div>
-                                    <div class="medication-status">
-                                        <div class="days-left" style="color: ${isActive ? 'var(--color-teal)' : 'var(--text-secondary)'}">
-                                            ${isActive ? daysRemaining : 'Fin'}
-                                        </div>
-                                        <div class="days-label">${isActive ? 'días restantes' : 'Tratamiento'}</div>
-                                    </div>
-                                </div>
-                            `;
-        }).join('')}
-                    </div>
+                    <div id="medications-list">${MedicationTracker.renderMedicationsList(trackedMedications)}</div>
                 </div>
             </section>
         ` : ''}
@@ -1588,7 +1867,14 @@ function renderNoteCard(note) {
             <div class="card-header">
                 <div class="card-type ${typeClass}">${note.type}</div>
                 <span class="card-time"><i class="ph ph-clock"></i> ${formatDate(note.createdAt)}</span>
-                <button class="btn-more"><i class="ph ph-dots-three-vertical"></i></button>
+                <div style="display: flex; gap: 6px;">
+                    <button class="btn-icon" onclick="openNoteModal('${note.patientId}', '${note.id}')" title="Editar nota">
+                        <i class="ph ph-pencil"></i>
+                    </button>
+                    <button class="btn-icon danger" onclick="deleteNote('${note.id}', '${note.patientId}')" title="Eliminar nota">
+                        <i class="ph ph-trash"></i>
+                    </button>
+                </div>
             </div>
             <div class="card-body">
                 <p>${filterClinicalContent(note.content)}</p>
@@ -1668,7 +1954,9 @@ function renderAppointments() {
             e.stopPropagation();
             const id = btn.dataset.id;
             if (confirm('¿Eliminar esta cita?')) {
+                NotificationManager.removeAppointmentReminders?.(id);
                 await deleteDoc(doc(db, "appointments", id));
+                logAction('delete_appointment', { appointmentId: id });
                 await loadAppointments();
                 renderAppointments();
             }
@@ -2107,6 +2395,7 @@ function renderProfile() {
             await setDoc(doc(db, "doctores", currentUser.uid), newData, { merge: true });
             currentDoctorData = { ...currentDoctorData, ...newData };
             updateSidebarProfile();
+            logAction('edit_profile', { userId: currentUser.uid });
             showToast('Perfil actualizado correctamente', 'success');
         } catch (error) {
             console.error("Error saving profile:", error);
@@ -2512,7 +2801,7 @@ function renderSettings() {
             BackupManager.downloadJSON(exportData, 'medrecord-backup');
             BackupManager.setLastBackupDate();
             showToast('Datos exportados correctamente', 'success');
-            AccessLogs.log('export_data', { target: 'full_backup' });
+            logAction('export_data', { target: 'full_backup', userId: currentUser?.uid || '' });
         } catch (error) {
             console.error('Error exporting:', error);
             showToast('Error al exportar datos', 'error');
@@ -2563,6 +2852,7 @@ function renderSettings() {
                     if (count > 0) {
                         await batch.commit();
                         await loadAllData();
+                        logAction('import_data', { count });
                         showToast(`Importación exitosa. ${count} registros restaurados.`, 'success');
                         navigateTo('dashboard');
                     } else {
@@ -2721,6 +3011,7 @@ savePatientBtn?.addEventListener('click', async () => {
         await loadConsultations();
         closeModal(patientModal);
         renderPatients();
+        logAction('create_patient', { patientId: docRef.id, patientName: patientData.name });
         showToast('Paciente registrado correctamente', 'success');
 
     } catch (error) {
@@ -2894,6 +3185,7 @@ saveConsultationBtn?.addEventListener('click', async () => {
         await loadConsultations();
         closeModal(consultationModal);
         renderPatients();
+        logAction('create_consultation', { patientId: consultingPatientId, reason });
         showToast('Consulta guardada correctamente', 'success');
 
     } catch (error) {
@@ -2958,10 +3250,23 @@ saveAppointmentBtn?.addEventListener('click', async () => {
     saveAppointmentBtn.textContent = 'Guardando...';
 
     try {
+        const scheduleAt = `${date}T${time}`;
+        const conflictingAppointment = appointmentsCache.find((appointment) =>
+            appointment.id !== editingAppointmentId && appointment.date === scheduleAt
+        );
+        if (conflictingAppointment) {
+            const conflictingPatient = patientsCache.find((patient) => patient.id === conflictingAppointment.patientId);
+            showError(
+                appointmentError,
+                `Ya existe una cita para ese horario (${conflictingPatient?.name || 'Paciente'}). Elige otra hora.`
+            );
+            return;
+        }
+
         const appointmentData = {
             userId: currentUser.uid,
             patientId: patientId,
-            date: `${date}T${time}`,
+            date: scheduleAt,
             type: type,
             notes: appointmentNotes.value.trim(),
             updatedAt: serverTimestamp()
@@ -2971,10 +3276,12 @@ saveAppointmentBtn?.addEventListener('click', async () => {
         if (editingAppointmentId) {
             NotificationManager.removeAppointmentReminders?.(editingAppointmentId);
             await updateDoc(doc(db, "appointments", editingAppointmentId), appointmentData);
+            logAction('edit_appointment', { appointmentId: editingAppointmentId, patientId, date: scheduleAt, type });
         } else {
             appointmentData.createdAt = serverTimestamp();
             const docRef = await addDoc(collection(db, "appointments"), appointmentData);
             savedAppointmentId = docRef.id;
+            logAction('create_appointment', { appointmentId: savedAppointmentId, patientId, date: scheduleAt, type });
         }
 
         const patient = patientsCache.find(p => p.id === patientId);
@@ -3002,9 +3309,11 @@ saveAppointmentBtn?.addEventListener('click', async () => {
 
 // Note Modal
 let noteForPatientId = null;
+let editingNoteId = null;
 
-function openNoteModal(patientId = null) {
+function openNoteModal(patientId = null, noteId = null) {
     noteForPatientId = patientId;
+    editingNoteId = noteId;
 
     // Populate patient dropdown
     notePatient.innerHTML = '<option value="">Seleccionar paciente...</option>';
@@ -3020,8 +3329,45 @@ function openNoteModal(patientId = null) {
         notePatient.disabled = false;
     }
 
-    noteType.value = 'CLÍNICO';
-    noteContent.value = '';
+    const noteFormGroup = noteContent?.closest('.form-group');
+    let templateControls = document.getElementById('note-template-controls');
+    if (!templateControls && noteFormGroup?.parentElement) {
+        templateControls = document.createElement('div');
+        templateControls.className = 'form-group';
+        templateControls.id = 'note-template-controls';
+        templateControls.innerHTML = `
+            <label>Plantillas Clínicas</label>
+            ${ClinicalTemplates.renderTemplateSelector()}
+        `;
+        noteFormGroup.parentElement.insertBefore(templateControls, noteFormGroup);
+    }
+
+    templateControls?.querySelectorAll('.template-btn').forEach((button) => {
+        button.onclick = () => {
+            const templateId = button.dataset.template;
+            const templateContent = ClinicalTemplates.generateNoteContent(templateId);
+            if (!templateContent) return;
+            if (noteContent.value.trim() && !confirm('¿Reemplazar el contenido actual con la plantilla seleccionada?')) {
+                return;
+            }
+            noteContent.value = templateContent;
+        };
+    });
+
+    if (noteId) {
+        const existingNote = notesCache.find((note) => note.id === noteId);
+        if (existingNote) {
+            notePatient.value = existingNote.patientId;
+            notePatient.disabled = true;
+            noteType.value = existingNote.type || 'CLÍNICO';
+            noteContent.value = existingNote.content || '';
+            saveNoteBtn.textContent = 'Actualizar Nota';
+        }
+    } else {
+        noteType.value = 'CLÍNICO';
+        noteContent.value = '';
+        saveNoteBtn.textContent = 'Guardar Nota';
+    }
 
     hideError(noteError);
     openModal(noteModal);
@@ -3043,17 +3389,28 @@ saveNoteBtn?.addEventListener('click', async () => {
     saveNoteBtn.textContent = 'Guardando...';
 
     try {
-        await addDoc(collection(db, "clinicalNotes"), {
-            userId: currentUser.uid,
-            patientId: patientId,
-            type: type,
-            content: content, // Save raw content; filter only on display
-            doctorName: currentDoctorData?.nombre || 'Doctor',
-            createdAt: serverTimestamp()
-        });
+        if (editingNoteId) {
+            await updateDoc(doc(db, "clinicalNotes", editingNoteId), {
+                type: type,
+                content: content,
+                updatedAt: serverTimestamp()
+            });
+            logAction('edit_note', { noteId: editingNoteId, patientId, type });
+        } else {
+            await addDoc(collection(db, "clinicalNotes"), {
+                userId: currentUser.uid,
+                patientId: patientId,
+                type: type,
+                content: content, // Save raw content; filter only on display
+                doctorName: currentDoctorData?.nombre || 'Doctor',
+                createdAt: serverTimestamp()
+            });
+            logAction('create_note', { patientId, type });
+        }
 
         await loadNotes();
         closeModal(noteModal);
+        editingNoteId = null;
 
         // Refresh current view
         if (currentRoute.startsWith('paciente/')) {
@@ -3067,9 +3424,29 @@ saveNoteBtn?.addEventListener('click', async () => {
         showError(noteError, 'Error al guardar la nota.');
     } finally {
         saveNoteBtn.disabled = false;
-        saveNoteBtn.textContent = 'Guardar Nota';
+        if (!editingNoteId) {
+            saveNoteBtn.textContent = 'Guardar Nota';
+        }
     }
 });
+
+async function deleteNote(noteId, patientId) {
+    if (!confirm('¿Eliminar esta nota clínica?')) return;
+    try {
+        await deleteDoc(doc(db, "clinicalNotes", noteId));
+        logAction('delete_note', { noteId, patientId });
+        await loadNotes();
+        if (currentRoute.startsWith('paciente/')) {
+            renderPatientDetail(patientId);
+        } else {
+            renderDashboard();
+        }
+        showToast('Nota eliminada correctamente', 'success');
+    } catch (error) {
+        console.error('Error deleting note:', error);
+        showToast('Error al eliminar la nota', 'error');
+    }
+}
 
 // Profile - Navigate to profile view
 userProfileBtn?.addEventListener('click', () => {
@@ -3113,6 +3490,7 @@ saveProfileBtn?.addEventListener('click', async () => {
         await setDoc(doc(db, "doctores", currentUser.uid), newData, { merge: true });
         currentDoctorData = { ...currentDoctorData, ...newData };
         updateSidebarProfile();
+        logAction('edit_profile', { userId: currentUser.uid });
 
         showToast('Perfil actualizado correctamente', 'success');
 
@@ -3350,6 +3728,9 @@ function renderVitalPatientCard(patient) {
                 <div class="no-vitals"><p>Sin registros de signos vitales</p></div>
             `}
             <div class="vitals-actions">
+                <button class="btn-secondary btn-small" onclick="showVitalsHistory('${patient.id}')">
+                    <i class="ph ph-chart-line"></i> Historial
+                </button>
                 <button class="btn-secondary btn-small" onclick="openVitalsModal('${patient.id}')">
                     <i class="ph ph-plus"></i> Registrar
                 </button>
@@ -3460,12 +3841,80 @@ async function saveVitalSigns() {
         const docRef = await addDoc(collection(db, "vitalSigns"), vitalsData);
         vitalSignsCache.unshift({ id: docRef.id, ...vitalsData, recordedAt: new Date() });
         closeModal(document.getElementById('vitals-modal'));
+        logAction('create_vitals', { patientId });
         showToast('Signos vitales registrados', 'success');
         renderVitalSigns();
     } catch (error) {
         console.error("Error saving vital signs:", error);
         showToast('Error al guardar', 'error');
     }
+}
+
+function showVitalsHistory(patientId) {
+    const patient = patientsCache.find((item) => item.id === patientId);
+    const patientVitals = vitalSignsCache
+        .filter((vitals) => vitals.patientId === patientId)
+        .sort((a, b) => {
+            const left = a.recordedAt?.toDate ? a.recordedAt.toDate() : new Date(a.recordedAt);
+            const right = b.recordedAt?.toDate ? b.recordedAt.toDate() : new Date(b.recordedAt);
+            return right - left;
+        });
+
+    const historyModal = document.createElement('div');
+    historyModal.className = 'modal';
+    historyModal.style.display = 'none';
+    historyModal.innerHTML = `
+        <div class="modal-box modal-xl">
+            <div class="modal-header">
+                <h2><i class="ph ph-chart-line"></i> Historial de Signos Vitales - ${patient?.name || 'Paciente'}</h2>
+                <button class="modal-close" onclick="const modal = this.closest('.modal'); closeModal(modal, () => modal.remove());">
+                    <i class="ph ph-x"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                ${patientVitals.length > 0 ? `
+                    <div class="vitals-history-table">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Fecha</th>
+                                    <th>P/A</th>
+                                    <th>Pulso</th>
+                                    <th>Temp</th>
+                                    <th>Peso</th>
+                                    <th>O₂</th>
+                                    <th>Notas</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${patientVitals.map((vitals) => `
+                                    <tr>
+                                        <td>${formatDate(vitals.recordedAt)}</td>
+                                        <td>${vitals.systolic || '-'} / ${vitals.diastolic || '-'}</td>
+                                        <td>${vitals.pulse ?? '-'}</td>
+                                        <td>${vitals.temperature ?? '-'}°C</td>
+                                        <td>${vitals.weight ?? '-'} kg</td>
+                                        <td>${vitals.oxygen ?? '-'}%</td>
+                                        <td>${(vitals.notes || '-').substring(0, 80)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                ` : `
+                    <div class="empty-state">
+                        <i class="ph ph-heartbeat"></i>
+                        <h3>No hay registros</h3>
+                        <p>Este paciente todavía no tiene historial de signos vitales.</p>
+                    </div>
+                `}
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(historyModal);
+    openModal(historyModal);
+    logAction('view_vitals_history', { patientId });
 }
 
 // ============================================================
@@ -3521,7 +3970,10 @@ function renderPrescriptions() {
         const search = e.target.value.toLowerCase();
         const filtered = prescriptionsCache.filter(rx => {
             const patient = patientsCache.find(p => p.id === rx.patientId);
-            return patient?.name.toLowerCase().includes(search);
+            const medicationMatch = (rx.medications || []).some((medication) =>
+                (medication.name || '').toLowerCase().includes(search)
+            );
+            return (patient?.name || '').toLowerCase().includes(search) || medicationMatch;
         });
         const listEl = document.getElementById('prescriptions-list');
         if (listEl) listEl.innerHTML = filtered.map(rx => renderPrescriptionCard(rx)).join('');
@@ -3673,6 +4125,20 @@ async function savePrescription() {
         return;
     }
 
+    const patient = patientsCache.find((item) => item.id === patientId);
+    const interactions = medications.flatMap((medication) =>
+        AllergyAlerts.checkDrugInteraction(patient?.allergies || '', medication.name)
+    );
+    if (interactions.length > 0) {
+        const interactionSummary = interactions.map((interaction) => `${interaction.medication}: ${interaction.message}`).join('\n');
+        const shouldContinue = confirm(
+            `Se detectaron posibles interacciones/alergias para este paciente:\n\n${interactionSummary}\n\n¿Deseas continuar con la prescripción?`
+        );
+        if (!shouldContinue) {
+            return;
+        }
+    }
+
     const rxData = {
         userId: currentUser.uid,
         patientId,
@@ -3688,6 +4154,12 @@ async function savePrescription() {
         const docRef = await addDoc(collection(db, "prescriptions"), rxData);
         prescriptionsCache.unshift({ id: docRef.id, ...rxData, createdAt: new Date() });
         closeModal(document.getElementById('prescription-modal'));
+        logAction('create_prescription', {
+            prescriptionId: docRef.id,
+            patientId,
+            medications: medications.map((medication) => medication.name),
+            hasInteractionAlerts: interactions.length > 0
+        });
         showToast('Receta guardada', 'success');
         renderPrescriptions();
     } catch (error) {
@@ -3699,6 +4171,7 @@ async function savePrescription() {
 function printPrescription(rxId) {
     const rx = prescriptionsCache.find(r => r.id === rxId);
     if (!rx) return;
+    logAction('view_prescription', { prescriptionId: rxId, patientId: rx.patientId });
 
     const patient = patientsCache.find(p => p.id === rx.patientId);
 
@@ -3752,6 +4225,7 @@ async function deletePrescription(rxId) {
     try {
         await deleteDoc(doc(db, "prescriptions", rxId));
         prescriptionsCache = prescriptionsCache.filter(r => r.id !== rxId);
+        logAction('delete_prescription', { prescriptionId: rxId });
         showToast('Receta eliminada', 'success');
         renderPrescriptions();
     } catch (error) {
@@ -3769,6 +4243,7 @@ function exportPatientPDF(patientId) {
         showToast('Paciente no encontrado', 'error');
         return;
     }
+    logAction('export_data', { target: 'patient_pdf', patientId });
 
     const patientNotes = notesCache.filter(n => n.patientId === patientId);
     const patientVitals = vitalSignsCache.filter(v => v.patientId === patientId);
@@ -3939,7 +4414,10 @@ window.navigateTo = navigateTo;
 window.animateContent = animateContent;
 window.openPatientModal = openPatientModal;
 window.openVitalsModal = openVitalsModal;
+window.showVitalsHistory = showVitalsHistory;
 window.openPrescriptionModal = openPrescriptionModal;
+window.openNoteModal = openNoteModal;
+window.deleteNote = deleteNote;
 window.printPrescription = printPrescription;
 window.deletePrescription = deletePrescription;
 window.exportPatientPDF = exportPatientPDF;
