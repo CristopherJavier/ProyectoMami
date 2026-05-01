@@ -56,6 +56,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+auth.languageCode = 'es'; // Forzar envío de correos en español
 
 enableIndexedDbPersistence(db).catch((error) => {
     if (error.code === 'failed-precondition') {
