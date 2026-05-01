@@ -5,9 +5,7 @@ const APP_SHELL = [
     '/',
     '/index.html',
     '/manifest.json',
-    '/logo.png',
-    '/app.js',
-    '/src/main.js'
+    '/logo.png'
 ];
 
 const FIREBASE_HOSTS = ['firebaseapp.com', 'googleapis.com', 'gstatic.com'];
