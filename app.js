@@ -1297,6 +1297,12 @@ function renderDashboard() {
     animateContent('dashboard');
 }
 
+function toDashboardDate(value) {
+    if (!value) return null;
+    const date = value.toDate ? value.toDate() : value instanceof Date ? value : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function renderActivityChart() {
     const canvas = document.getElementById('activity-chart');
     if (!canvas) return;
@@ -1308,6 +1314,7 @@ function renderActivityChart() {
 
     // Get last 7 days data
     const labels = [];
+    const patientsData = [];
     const appointmentsData = [];
     const notesData = [];
 
@@ -1321,17 +1328,22 @@ function renderActivityChart() {
 
         labels.push(date.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric' }));
 
+        const dayPatients = patientsCache.filter(patient => {
+            const patientDate = toDashboardDate(patient.createdAt);
+            return patientDate && patientDate >= date && patientDate < nextDay;
+        }).length;
+
         const dayAppointments = appointmentsCache.filter(apt => {
-            const aptDate = new Date(apt.date);
+            const aptDate = toDashboardDate(apt.date);
             return aptDate >= date && aptDate < nextDay;
         }).length;
 
         const dayNotes = notesCache.filter(note => {
-            if (!note.createdAt) return false;
-            const noteDate = note.createdAt.toDate ? note.createdAt.toDate() : new Date(note.createdAt);
+            const noteDate = toDashboardDate(note.createdAt);
             return noteDate >= date && noteDate < nextDay;
         }).length;
 
+        patientsData.push(dayPatients);
         appointmentsData.push(dayAppointments);
         notesData.push(dayNotes);
     }
@@ -1341,6 +1353,12 @@ function renderActivityChart() {
         data: {
             labels: labels,
             datasets: [
+                {
+                    label: 'Pacientes',
+                    data: patientsData,
+                    backgroundColor: 'rgba(99, 102, 241, 0.8)',
+                    borderRadius: 6
+                },
                 {
                     label: 'Citas',
                     data: appointmentsData,
